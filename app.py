@@ -5,9 +5,20 @@ from llama_index.llms.openai import OpenAI
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, load_index_from_storage, StorageContext
 from llama_index.core.settings import Settings
 from llama_index.core.response.pprint_utils import pprint_response
+import warnings
+from llama_index.core.indices.postprocessor import SentenceTransformerRerank
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.schema import TextNode
 
 # Load environment variables
 load_dotenv('.env')
+
+# Suppress specific FutureWarnings from huggingface_hub
+warnings.filterwarnings("ignore", category=FutureWarning, module='huggingface_hub')
+
+class QueryBundle:
+    def __init__(self, query_str):
+        self.query_str = query_str
 
 # Define paths
 storage_path = './vectorstore'
@@ -23,12 +34,31 @@ if not os.path.exists(storage_path):
 if not os.path.exists(documents_path):
     os.makedirs(documents_path, exist_ok=True)
 
+# Initialize the reranker
+reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-2-v2", top_n=5)
+
+# Initialize the parser
+parser = SentenceSplitter()
+
+def pprint_response(response, show_source=False):
+    if isinstance(response, str):
+        print(response)  # Handle the string directly
+    else:
+        if response.response is None:
+            print("No response.")
+        else:
+            print(response.response)
+            if show_source:
+                print("Source:", response.source)
+
+
 # Function to initialize or load the index
 @st.cache_resource(show_spinner=False)
 def initialize():
     if not os.path.isfile(os.path.join(storage_path, 'docstore.json')):
         documents = SimpleDirectoryReader(documents_path).load_data()
-        index = VectorStoreIndex.from_documents(documents)
+        nodes = parser.get_nodes_from_documents(documents)
+        index = VectorStoreIndex(nodes)
         index.storage_context.persist(persist_dir=storage_path)
     else:
         storage_context = StorageContext.from_defaults(persist_dir=storage_path)
@@ -44,6 +74,7 @@ if not os.listdir(documents_path):
             with open(os.path.join(documents_path, uploaded_file.name), "wb") as f:
                 f.write(uploaded_file.getvalue())
         st.rerun()  # Rerun the script after files are uploaded
+        
 
 # Initialize index if documents are present
 if os.listdir(documents_path):
@@ -66,8 +97,18 @@ if os.listdir(documents_path):
         with st.spinner('Thinking...'):
             response = chat_engine.chat(prompt)
             st.write(response.response)
-            pprint_response(response, show_source=True)
-            st.session_state.messages.append({'role': 'assistant', 'content': response.response})
-else:
-    st.write("Upload documents to start using the application.")
             
+            # Create a QueryBundle object
+            query_bundle = QueryBundle(prompt)
+            
+            # Assume response.response is a list of strings
+            nodes = [TextNode(text=res) for res in response.response] if isinstance(response.response, list) else []
+
+            reranked_nodes = reranker.postprocess_nodes(nodes=nodes, query_bundle=query_bundle)
+            reranked_response = ' '.join([node.text for node in reranked_nodes])
+            st.write(reranked_response)
+            pprint_response(reranked_response, show_source=True)
+            st.session_state.messages.append({'role': 'assistant', 'content': reranked_response})
+else:
+    st.write("Upload documents to start using the application.")            
+    
