@@ -13,6 +13,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import json
 import traceback
+from llama_index.llms.ollama import Ollama
 
 # Load environment variables
 load_dotenv('.env')
@@ -29,7 +30,10 @@ storage_path = './vectorstore'
 documents_path = './documents'
 
 # Set the model configuration
-Settings.llm = OpenAI(model='gpt-3.5-turbo', temperature=0.1)
+# Settings.llm = OpenAI(model='gpt-3.5-turbo', temperature=0.1)
+
+# Set the model configuration to use phi-3 from Microsoft
+llm = Ollama(model='phi-3')
 
 # Ensure directories exist
 if not os.path.exists(storage_path):
