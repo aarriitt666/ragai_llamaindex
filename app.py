@@ -11,6 +11,8 @@ from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import TextNode
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import json
+import traceback
 
 # Load environment variables
 load_dotenv('.env')
@@ -41,6 +43,30 @@ reranker = SentenceTransformerRerank(model="cross-encoder/ms-marco-MiniLM-L-2-v2
 
 # Initialize the parser
 parser = SentenceSplitter()
+
+def document_changes_detected(documents_path, metadata_path):
+    # Load existing metadata if available
+    if os.path.exists(metadata_path):
+        with open(metadata_path, 'r') as f:
+            indexed_files = set(json.load(f))
+    else:
+        indexed_files = set()
+
+    # Get the current set of documents
+    current_files = {file for file in os.listdir(documents_path) if os.path.isfile(os.path.join(documents_path, file))}
+
+    # Detect changes
+    new_files = current_files - indexed_files
+    removed_files = indexed_files - current_files
+
+    # Update metadata file if changes are detected
+    if new_files or removed_files:
+        with open(metadata_path, 'w') as f:
+            json.dump(list(current_files), f)
+        return True
+
+    return False
+
 
 def pprint_response(response, show_source=False):
     if isinstance(response, str):
@@ -80,10 +106,11 @@ def enhance_and_rerank_responses(responses, query):
     best_response_idx = avg_similarity.argmax()
     return reranked_responses[best_response_idx]
 
-# Function to initialize or load the index
+
 @st.cache_resource(show_spinner=False)
-def initialize():
-    if not os.path.isfile(os.path.join(storage_path, 'docstore.json')):
+def initialize(force_reindex=False):
+    metadata_path = os.path.join(storage_path, 'metadata.json')
+    if force_reindex or document_changes_detected(documents_path, metadata_path):
         documents = SimpleDirectoryReader(documents_path).load_data()
         nodes = parser.get_nodes_from_documents(documents)
         index = VectorStoreIndex(nodes)
@@ -94,55 +121,55 @@ def initialize():
     return index
 
 def main():
-    # Check for documents and possibly upload new ones
-    if not os.listdir(documents_path):
-        st.error("No documents found. Please upload your documents.")
-        uploaded_files = st.file_uploader("Upload documents", accept_multiple_files=True, type=['pdf', 'txt', 'docx'])
-        if uploaded_files:
-            for uploaded_file in uploaded_files:
-                with open(os.path.join(documents_path, uploaded_file.name), "wb") as f:
-                    f.write(uploaded_file.getvalue())
-            st.rerun()  # Rerun the script after files are uploaded
-            
+    st.title('Ask the Document')
 
-    # Initialize index if documents are present
-    if os.listdir(documents_path):
-        index = initialize()
+    # Button to force re-indexing
+    force_reindex = st.button("Re-index Documents")
+    if force_reindex:
+        st.info("Re-indexing triggered...")
 
-        st.title('Ask the Document')
-        if 'messages' not in st.session_state:
-            st.session_state.messages = [{'role': 'assistant', 'content': 'Ask me a question!'}]
+    try:
+        # Initialize or reinitialize index if needed
+        index = initialize(force_reindex=force_reindex)
+        st.info("Index initialized or loaded successfully.")
 
-        chat_engine = index.as_chat_engine(chat_mode='condense_question', verbose=True)
+        # Check for documents and handle uploads
+        if not os.listdir(documents_path):
+            st.error("No documents found. Please upload your documents.")
+            uploaded_files = st.file_uploader("Upload documents", accept_multiple_files=True, type=['pdf', 'txt', 'docx'])
+            if uploaded_files:
+                for uploaded_file in uploaded_files:
+                    with open(os.path.join(documents_path, uploaded_file.name), "wb") as f:
+                        f.write(uploaded_file.getvalue())
+                st.experimental_rerun()  # Rerun the script after files are uploaded
+        else:
+            if 'messages' not in st.session_state:
+                st.session_state.messages = [{'role': 'assistant', 'content': 'Ask me a question!'}]
 
-        if prompt := st.text_input('Your question'):
-            st.session_state.messages.append({'role': 'user', 'content': prompt})
+            # Document interaction section
+            chat_engine = index.as_chat_engine(chat_mode='condense_question', verbose=True)
+            if prompt := st.text_input('Your question'):
+                st.session_state.messages.append({'role': 'user', 'content': prompt})
 
-        for message in st.session_state.messages:
-            with st.expander(f"{message['role'].title()} says:"):
-                st.write(message['content'])
+            for message in st.session_state.messages:
+                with st.expander(f"{message['role'].title()} says:"):
+                    st.write(message['content'])
 
-        if st.session_state.messages[-1]['role'] != 'assistant':
-            with st.spinner('Thinking...'):
-                response = chat_engine.chat(prompt)
-                response_texts = response.response if isinstance(response.response, list) else [response.response]
-                st.write(response_texts)
-                
-                # Create a QueryBundle object
-                # query_bundle = QueryBundle(prompt)
-                
-                # Assume response.response is a list of strings
-                # nodes = [TextNode(text=res) for res in response.response] if isinstance(response.response, list) else []
+            if st.session_state.messages[-1]['role'] != 'assistant':
+                with st.spinner('Thinking...'):
+                    response = chat_engine.chat(prompt)
+                    response_texts = response.response if isinstance(response.response, list) else [response.response]
+                    st.write(response_texts)
 
-                # reranked_nodes = reranker.postprocess_nodes(nodes=nodes, query_bundle=query_bundle)
-                # reranked_response = ' '.join([node.text for node in reranked_nodes])
-                # st.write(reranked_response)
-                best_response = enhance_and_rerank_responses(response_texts, prompt)
-                pprint_response(best_response, show_source=True)
-                st.session_state.messages.append({'role': 'assistant', 'content': best_response})
-    else:
-        st.write("Upload documents to start using the application.") 
-        
+                    best_response = enhance_and_rerank_responses(response_texts, prompt)
+                    pprint_response(best_response, show_source=True)
+                    st.session_state.messages.append({'role': 'assistant', 'content': best_response})
+
+    except Exception as e:
+        st.error("An error occurred during document processing or initialization.")
+        st.text(f"Error: {e}")
+        st.text(traceback.format_exc())  # To show full traceback in the interface
+
 if __name__ == "__main__":
-    main()           
+    main()
     
