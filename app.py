@@ -136,6 +136,10 @@ def main():
     force_reindex = st.button("Re-index Documents")
     if force_reindex:
         st.info("Re-indexing triggered...")
+        
+    if st.button('Clear Cache'):
+        st.cache_data.clear()
+        st.info('Cache cleared!')
 
     try:
         # Initialize or reinitialize index if needed
