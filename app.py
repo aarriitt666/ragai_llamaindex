@@ -13,7 +13,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import json
 import traceback
-from llama_index.llms.ollama import Ollama
+from llama_index.embeddings.ollama import OllamaEmbedding
 
 # Load environment variables
 load_dotenv('.env')
@@ -30,10 +30,15 @@ storage_path = './vectorstore'
 documents_path = './documents'
 
 # Set the model configuration
-# Settings.llm = OpenAI(model='gpt-3.5-turbo', temperature=0.1)
+Settings.llm = OpenAI(model='gpt-3.5-turbo', temperature=0.1)
 
-# Set the model configuration to use phi-3 from Microsoft
-llm = Ollama(model='phi-3')
+ollama_embedding = OllamaEmbedding(
+    model_name="nomic-embed-text:latest",
+    base_url="http://localhost:11434",
+    ollama_additional_kwargs={"mirostat": 0},
+)
+
+Settings.embed_model = ollama_embedding
 
 # Ensure directories exist
 if not os.path.exists(storage_path):
@@ -117,7 +122,7 @@ def initialize(force_reindex=False):
     if force_reindex or document_changes_detected(documents_path, metadata_path):
         documents = SimpleDirectoryReader(documents_path).load_data()
         nodes = parser.get_nodes_from_documents(documents)
-        index = VectorStoreIndex(nodes)
+        index = VectorStoreIndex(nodes, embed_model=Settings.embed_model)
         index.storage_context.persist(persist_dir=storage_path)
     else:
         storage_context = StorageContext.from_defaults(persist_dir=storage_path)

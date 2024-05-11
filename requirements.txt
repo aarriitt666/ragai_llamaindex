@@ -36,6 +36,8 @@ llama-index==0.10.35
 llama-index-agent-openai==0.2.4
 llama-index-cli==0.1.12
 llama-index-core==0.10.35.post1
+llama-index-embeddings-huggingface==0.2.0
+llama-index-embeddings-ollama==0.1.2
 llama-index-embeddings-openai==0.1.9
 llama-index-indices-managed-llama-cloud==0.1.6
 llama-index-legacy==0.9.48
@@ -52,6 +54,7 @@ markdown-it-py==3.0.0
 MarkupSafe==2.1.5
 marshmallow==3.21.2
 mdurl==0.1.2
+minijinja==2.0.1
 mpmath==1.3.0
 multidict==6.0.5
 mypy-extensions==1.0.0
