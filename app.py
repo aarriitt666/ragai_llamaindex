@@ -29,8 +29,16 @@ class QueryBundle:
 storage_path = './vectorstore'
 documents_path = './documents'
 
+# Model selection
+model_option = st.selectbox(
+    "Select LLM model",
+    ("gpt-3.5-turbo", "gpt-4o")
+    )
+
 # Set the model configuration
-Settings.llm = OpenAI(model='gpt-3.5-turbo', temperature=0.1)
+Settings.llm = OpenAI(model=model_option, temperature=0.1)
+Settings.chunk_size = 2048
+Settings.chunk_overlap = 500
 
 ollama_embedding = OllamaEmbedding(
     model_name="nomic-embed-text:latest",
@@ -68,14 +76,17 @@ def document_changes_detected(documents_path, metadata_path):
     new_files = current_files - indexed_files
     removed_files = indexed_files - current_files
 
+    # Log changes
+    # st.write(f"Current files: {current_files}")
+    # st.write(f"Indexed files: {indexed_files}")
+    # st.write(f"New files: {new_files}")
+    # st.write(f"Removed files: {removed_files}")
+
     # Update metadata file if changes are detected
     if new_files or removed_files:
         with open(metadata_path, 'w') as f:
             json.dump(list(current_files), f)
-        return True
-
-    return False
-
+    return list(new_files), list(removed_files)
 
 def pprint_response(response, show_source=False):
     if isinstance(response, str):
@@ -117,34 +128,64 @@ def enhance_and_rerank_responses(responses, query):
 
 
 @st.cache_resource(show_spinner=False)
-def initialize(force_reindex=False):
+def initialize(force_reindex=False, incremental_index=False):
     metadata_path = os.path.join(storage_path, 'metadata.json')
-    if force_reindex or document_changes_detected(documents_path, metadata_path):
-        documents = SimpleDirectoryReader(documents_path).load_data()
+    new_files, removed_files = document_changes_detected(documents_path, metadata_path)
+
+    if force_reindex:
+        # If force_reindex is True, load or create a new index from scratch
+        documents = SimpleDirectoryReader(input_dir=documents_path).load_data()
         nodes = parser.get_nodes_from_documents(documents)
         index = VectorStoreIndex(nodes, embed_model=Settings.embed_model)
         index.storage_context.persist(persist_dir=storage_path)
+        return index, "Re-indexing completed."
     else:
+        # Load the existing index from storage
         storage_context = StorageContext.from_defaults(persist_dir=storage_path)
         index = load_index_from_storage(storage_context)
-    return index
+        
+        # Handle incremental indexing
+        if new_files:
+            new_file_paths = [os.path.join(documents_path, file) for file in new_files]
+            new_documents = SimpleDirectoryReader(input_files=new_file_paths).load_data()
+            new_nodes = parser.get_nodes_from_documents(new_documents)
+            index.insert_nodes(new_nodes)
+            incremental_message = "Incremental re-indexing completed."
+        else:
+            incremental_message = "No new documents detected. Incremental re-indexing not needed."
+
+        # Handle removed files
+        if removed_files:
+            for file in removed_files:
+                index.docstore.delete_document(file)
+
+        index.storage_context.persist(persist_dir=storage_path)
+
+    return index, incremental_message
 
 def main():
     st.title('Ask the Document')
 
     # Button to force re-indexing
     force_reindex = st.button("Re-index Documents")
+
+    # Button to trigger incremental indexing
+    incremental_index = st.button("Incremental Indexing")
+
     if force_reindex:
         st.info("Re-indexing triggered...")
-        
+
+    if incremental_index:
+        st.info("Incremental indexing triggered...")
+
     if st.button('Clear Cache'):
         st.cache_data.clear()
         st.info('Cache cleared!')
 
     try:
         # Initialize or reinitialize index if needed
-        index = initialize(force_reindex=force_reindex)
-        st.info("Index initialized or loaded successfully.")
+        index, message = initialize(force_reindex=force_reindex, incremental_index=incremental_index)
+        st.info(f"Index initialized or loaded successfully.  {message}")
 
         # Check for documents and handle uploads
         if not os.listdir(documents_path):
